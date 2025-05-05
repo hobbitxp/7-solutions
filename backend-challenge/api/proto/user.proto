@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "github.com/7-solutions/backend-challenge/api/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service UserService {
+  // Create a new user
+  rpc CreateUser(CreateUserRequest) returns (UserResponse) {}
+  
+  // Get a user by ID
+  rpc GetUser(GetUserRequest) returns (UserResponse) {}
+  
+  // List all users with pagination
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+  
+  // Update a user
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse) {}
+  
+  // Delete a user
+  rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty) {}
+  
+  // Login and get a JWT token
+  rpc Login(LoginRequest) returns (LoginResponse) {}
+}
+
+// Request to create a new user
+message CreateUserRequest {
+  string name = 1;
+  string email = 2;
+  string password = 3;
+}
+
+// Request to get a user by ID
+message GetUserRequest {
+  string id = 1;
+}
+
+// Request to list users with pagination
+message ListUsersRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+// Response containing a list of users
+message ListUsersResponse {
+  repeated User users = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  int64 total_items = 4;
+}
+
+// Request to update a user
+message UpdateUserRequest {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+}
+
+// Request to delete a user
+message DeleteUserRequest {
+  string id = 1;
+}
+
+// Request to login
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+// Response containing login token
+message LoginResponse {
+  string token = 1;
+  User user = 2;
+}
+
+// User model
+message User {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
