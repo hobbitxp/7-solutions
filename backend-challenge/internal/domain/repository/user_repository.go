@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/model"
 )
 
 // UserRepository defines the interface for user data access

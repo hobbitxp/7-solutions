@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/model"
 )
 
 func TestJWTAuthService(t *testing.T) {

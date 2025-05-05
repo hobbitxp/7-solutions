@@ -1,99 +1,132 @@
-# User Service API
+# Backend Golang Coding Test
 
-A RESTful API built in Golang that manages a list of users with MongoDB for persistence and JWT for authentication.
+## Objective
+Build a simple RESTful API in Golang that manages a list of users and todo items. Use MongoDB for persistence, JWT for authentication, and follow clean code practices. The API also includes a special Todo feature with an auto-return functionality.
 
-## Features
+---
 
-- User management (create, read, update, delete)
-- Authentication with JWT
-- MongoDB integration
-- Hexagonal Architecture
-- Input validation
-- Graceful shutdown
-- gRPC server
-- Docker and docker-compose configuration
+## Requirements
 
-## Architecture
+### 1. User Model
+Each user should have:
+- `ID` (auto-generated)
+- `Name` (string)
+- `Email` (string, unique)
+- `Password` (hashed)
+- `CreatedAt` (timestamp)
 
-The application follows the hexagonal (ports & adapters) architecture:
+---
 
-- **Domain layer**: Contains the core business logic and entities
-- **Application layer**: Contains the application services and handlers
-- **Infrastructure layer**: Contains adapters for external dependencies
+### 2. Authentication
 
-## Getting Started
+#### Functions
+- Register a new user.
+- Authenticate user and return a JWT.
 
-### Prerequisites
+#### JWT
+- Use JWT for protecting endpoints.
+- Use middleware to validate tokens.
+- Use HMAC (HS256) with a secret key.
 
-- Go 1.21 or higher
-- MongoDB
-- Docker and docker-compose (optional)
+---
 
-### Running with Docker
+### 3. User Functions
 
-The easiest way to start the application is using Docker:
+- Create a new user.
+- Fetch user by ID.
+- List all users.
+- Update a user's name or email.
+- Delete a user.
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd backend-challenge
+---
 
-# Start the application with Docker Compose
-docker-compose up -d
-```
+### 4. MongoDB Integration
+- Use the official Go MongoDB driver.
+- Store and retrieve users from MongoDB.
 
-### Running Locally
+---
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd backend-challenge
+### 5. Middleware
+- Logging middleware that logs HTTP method, path, and execution time.
 
-# Copy the example env file
-cp .env.example .env
+---
 
-# Update the .env file with your configuration
+### 6. Concurrency Tasks
+- Run a background goroutine every 10 seconds that logs the number of users in the DB.
+- Implement an auto-return feature for todo items that automatically returns them to the main list after 5 seconds.
 
-# Run the application
-go run cmd/api/main.go
-```
+---
+
+### 7. Todo Functionality
+- Todo items are categorized by type (Fruit, Vegetable) and status (MAIN, COLUMN).
+- Todo items can be "clicked" to move them from the main list to their appropriate category column.
+- Clicked items automatically return to the main list after 5 seconds.
+- Background processing checks for items that should be returned.
+
+---
+
+### 8. Testing
+Write unit tests
+
+Use Go’s `testing` package. Mock MongoDB where possible.
+
+---
+
+## Bonus (Optional)
+
+- Add Docker + `docker-compose` for API + MongoDB.
+- Use Go interfaces to abstract MongoDB operations for testability.
+- Add input validation (e.g., required fields, valid email).
+- Implement graceful shutdown using `context.Context`.
+- **gRPC Version**
+  - Create a `.proto` file for `CreateUser` and `GetUser`.
+  - Implement a gRPC server.
+  - (Optional) Secure gRPC with token metadata.
+- **Hexagonal Architecture**
+  - Structure the project using hexagonal (ports & adapters) architecture:
+    - Separate domain, application, and infrastructure layers.
+    - Use interfaces for data access and external dependencies.
+    - Keep business logic decoupled from frameworks and DB drivers.
+
+---
+
+## Submission Guidelines
+
+- Submit a GitHub repo or zip file.
+- Include a `README.md` with:
+  - Project setup and run instructions
+  - JWT token usage guide
+  - Sample API requests/responses
+  - Any assumptions or decisions made
 
 ## API Endpoints
 
 ### Authentication
-
-- **POST /api/auth/register** - Register a new user
-- **POST /api/auth/login** - Login and get JWT token
+- `POST /api/auth/register` - Register a new user
+- `POST /api/auth/login` - Login and get JWT token
 
 ### User Management
+- `GET /api/users` - List all users
+- `GET /api/users/:id` - Get a specific user
+- `PUT /api/users/:id` - Update a user
+- `DELETE /api/users/:id` - Delete a user
 
-- **GET /api/users** - List all users (requires authentication)
-- **GET /api/users/{id}** - Get a user by ID (requires authentication)
-- **PUT /api/users/{id}** - Update a user (requires authentication)
-- **DELETE /api/users/{id}** - Delete a user (requires authentication)
+### Todo Management
+- `GET /api/todos` - List all todos grouped by status and type
+- `POST /api/todos` - Create a new todo
+- `GET /api/todos/:id` - Get a specific todo
+- `PUT /api/todos/:id` - Update a todo
+- `DELETE /api/todos/:id` - Delete a todo
+- `POST /api/todos/:id/click` - Click a todo to move it to its type column
 
-## gRPC Services
+---
 
-The application also provides a gRPC API on port 50051 with the following services:
+## Evaluation Criteria
 
-- **CreateUser** - Create a new user
-- **GetUser** - Get a user by ID
-- **ListUsers** - List all users with pagination
-- **UpdateUser** - Update a user
-- **DeleteUser** - Delete a user
-- **Login** - Login and get JWT token
-
-## JWT Authentication
-
-The API uses JWT (JSON Web Tokens) for authentication:
-
-1. Register or login to get a JWT token
-2. Include the token in the `Authorization` header as `Bearer <token>` for protected endpoints
-
-## Testing
-
-Run the tests with:
-
-```bash
-go test ./...
-```
+- Code quality, structure, and readability
+- REST API correctness and completeness
+- JWT implementation and security
+- MongoDB usage and abstraction
+- Bonus: gRPC, Docker, validation, shutdown
+- Testing coverage and mocking
+- Use of idiomatic Go

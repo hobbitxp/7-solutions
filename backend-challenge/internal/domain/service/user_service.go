@@ -2,19 +2,12 @@ package service
 
 import (
 	"context"
-	"errors"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
-	"github.com/7-solutions/backend-challenge/internal/domain/repository"
+	"backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/repository"
 )
 
-// Common errors
-var (
-	ErrUserNotFound    = errors.New("user not found")
-	ErrEmailExists     = errors.New("email already exists")
-	ErrInvalidID       = errors.New("invalid ID")
-	ErrInvalidPassword = errors.New("invalid password")
-)
+// User service errors are now defined in errors.go
 
 // UserService defines the user business logic service
 type UserService interface {

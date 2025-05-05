@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
-	"github.com/7-solutions/backend-challenge/internal/domain/service"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/auth"
+	"backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/service"
+	"backend-challenge/internal/infrastructure/auth"
 	"github.com/gorilla/mux"
 )
 

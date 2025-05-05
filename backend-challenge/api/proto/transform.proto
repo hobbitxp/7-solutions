@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package transform;
+
+option go_package = "./;pb";
+
+import "google/protobuf/empty.proto";
+
+// TransformService handles data transformation operations
+service TransformService {
+  // Group users by department
+  rpc GroupUsersByDepartment(GroupUsersByDepartmentRequest) returns (GroupUsersByDepartmentResponse) {}
+  
+  // Fetch users from external API and transform data
+  rpc FetchAndTransform(FetchAndTransformRequest) returns (GroupUsersByDepartmentResponse) {}
+}
+
+// Request to group users by department
+message GroupUsersByDepartmentRequest {
+  // Raw user data from dummyjson API or other source
+  repeated UserData users = 1;
+}
+
+// Request to fetch and transform user data
+message FetchAndTransformRequest {
+  // URL to fetch users from (default to dummyjson if empty)
+  string api_url = 1;
+}
+
+// Response containing grouped user data by department
+message GroupUsersByDepartmentResponse {
+  // Map of department to department data
+  map<string, DepartmentData> departments = 1;
+}
+
+// User data from external API
+message UserData {
+  int32 id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  string maiden_name = 4;
+  int32 age = 5;
+  string gender = 6;
+  string email = 7;
+  string phone = 8;
+  string username = 9;
+  string password = 10;
+  string birth_date = 11;
+  string image = 12;
+  float height = 13;
+  float weight = 14;
+  HairData hair = 15;
+  AddressData address = 16;
+  BankData bank = 17;
+  CompanyData company = 18;
+}
+
+// Hair data
+message HairData {
+  string color = 1;
+  string type = 2;
+}
+
+// Address data
+message AddressData {
+  string address = 1;
+  string city = 2;
+  string postal_code = 3;
+  string state = 4;
+}
+
+// Bank data
+message BankData {
+  string card_expire = 1;
+  string card_number = 2;
+  string card_type = 3;
+  string currency = 4;
+  string iban = 5;
+}
+
+// Company data
+message CompanyData {
+  AddressData address = 1;
+  string department = 2;
+  string name = 3;
+  string title = 4;
+}
+
+// Department data
+message DepartmentData {
+  // Count of male users
+  int32 male = 1;
+  
+  // Count of female users
+  int32 female = 2;
+  
+  // Age range in format "XX-XX"
+  string age_range = 3;
+  
+  // Hair color counts
+  map<string, int32> hair = 4;
+  
+  // Map of user full names to postal codes
+  map<string, string> address_user = 5;
+}

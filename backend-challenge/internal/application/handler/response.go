@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/service"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/auth"
-	repo "github.com/7-solutions/backend-challenge/internal/infrastructure/repository"
+	"backend-challenge/internal/domain/service"
+	"backend-challenge/internal/infrastructure/auth"
+	repo "backend-challenge/internal/infrastructure/repository"
 )
 
 // ErrorResponse represents an error response

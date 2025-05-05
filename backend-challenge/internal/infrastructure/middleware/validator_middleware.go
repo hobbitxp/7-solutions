@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/7-solutions/backend-challenge/pkg/validator"
+	"backend-challenge/pkg/validator"
 )
 
 // ValidationErrorResponse represents a validation error response

@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
-	"github.com/7-solutions/backend-challenge/internal/domain/service"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/auth"
+	"backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/service"
+	"backend-challenge/internal/infrastructure/auth"
 	"github.com/gorilla/mux"
 )
 
@@ -23,8 +23,12 @@ func RegisterAuthHandler(r *mux.Router, authService auth.AuthService, userServic
 		userService: userService,
 	}
 
-	r.HandleFunc("/api/auth/register", handler.Register).Methods("POST")
-	r.HandleFunc("/api/auth/login", handler.Login).Methods("POST")
+	// Create a subrouter for auth endpoints
+	authRouter := r.PathPrefix("/api/auth").Subrouter()
+	
+	// Register routes
+	authRouter.HandleFunc("/register", handler.Register).Methods("POST")
+	authRouter.HandleFunc("/login", handler.Login).Methods("POST")
 }
 
 // Register handles user registration

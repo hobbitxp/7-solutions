@@ -1,0 +1,204 @@
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"backend-challenge/internal/application/handler"
+	"backend-challenge/internal/domain/repository"
+	"backend-challenge/internal/domain/service"
+	"backend-challenge/internal/infrastructure/auth"
+	grpcserver "backend-challenge/internal/infrastructure/grpc"
+	"backend-challenge/internal/infrastructure/middleware"
+	repo "backend-challenge/internal/infrastructure/repository"
+	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection" // Added for gRPC reflection
+)
+
+func main() {
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using environment variables")
+	}
+
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Setup MongoDB connection
+	mongoURI := getEnv("MONGODB_URI", "")
+	if mongoURI == "" {
+		log.Println("MONGODB_URI not set, checking legacy MONGO_URI")
+		mongoURI = getEnv("MONGO_URI", "") // Check legacy variable for backward compatibility
+	}
+	
+	dbName := getEnv("DB_NAME", "user_service")
+	log.Printf("Connecting to MongoDB: URI=%s, DB=%s", mongoURI, dbName)
+	
+	mongoRepo, err := repo.NewMongoRepository(ctx, mongoURI, dbName)
+	if err != nil {
+		log.Printf("WARNING: Failed to connect to MongoDB: %v. Using in-memory repository instead", err)
+		mongoRepo = repo.NewMockRepository() // Fallback to mock repository
+	} else {
+		log.Println("Connected to MongoDB successfully")
+		defer mongoRepo.Disconnect(ctx)
+	}
+
+	// Setup Auth Service
+	jwtSecret := getEnv("JWT_SECRET", "your-secret-key")
+	jwtExpiry := getEnvDuration("JWT_EXPIRY", 24*time.Hour) // Default 24 hours
+	authService := auth.NewJWTAuthService(jwtSecret, jwtExpiry)
+
+	// Setup User Service
+	userService := service.NewUserService(mongoRepo)
+
+	// Setup REST API server
+	restServer := setupRESTServer(userService, authService)
+	
+	// Setup gRPC server
+	grpcServer := setupGRPCServer(userService, authService)
+	
+	// Start background user count logging
+	go startBackgroundUserCount(ctx, mongoRepo)
+
+	// Start both REST and gRPC servers
+	go startRESTServer(restServer)
+	go startGRPCServer(grpcServer)
+
+	// Setup graceful shutdown for both servers
+	gracefulShutdown(ctx, cancel, restServer, grpcServer)
+}
+
+// Setup REST API server
+func setupRESTServer(userService service.UserService, authService auth.AuthService) *http.Server {
+	// Setup Router
+	r := mux.NewRouter()
+	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.PanicRecoveryMiddleware)
+
+	// Register handlers
+	handler.RegisterAuthHandler(r, authService, userService)
+	handler.RegisterUserHandler(r, userService, authService)
+
+	// Setup API server
+	port := getEnv("PORT", "8080")
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: r,
+	}
+
+	return srv
+}
+
+// Start REST API server
+func startRESTServer(srv *http.Server) {
+	log.Printf("Starting REST server on %s", srv.Addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Failed to start REST server: %v", err)
+	}
+}
+
+// Setup gRPC server
+func setupGRPCServer(userService service.UserService, authService auth.AuthService) *grpc.Server {
+	// Create gRPC server
+	grpcServer := grpc.NewServer()
+
+	// Register services
+	grpcserver.Register(grpcServer, userService, authService)
+	
+	// Register reflection service for grpcurl
+	reflection.Register(grpcServer)
+
+	return grpcServer
+}
+
+// Start gRPC server
+func startGRPCServer(grpcServer *grpc.Server) {
+	port := getEnv("GRPC_PORT", "50051")
+	lis, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		log.Fatalf("Failed to listen for gRPC: %v", err)
+	}
+
+	log.Printf("Starting gRPC server on :%s", port)
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Failed to start gRPC server: %v", err)
+	}
+}
+
+// Background goroutine that logs the number of users every 10 seconds
+func startBackgroundUserCount(ctx context.Context, userRepo repository.UserRepository) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			count, err := userRepo.CountUsers(ctx)
+			if err != nil {
+				log.Printf("Error counting users: %v", err)
+			} else {
+				log.Printf("Current user count: %d", count)
+			}
+		case <-ctx.Done():
+			log.Println("Stopping background user count")
+			return
+		}
+	}
+}
+
+// Graceful shutdown handler
+func gracefulShutdown(ctx context.Context, cancel context.CancelFunc, httpServer *http.Server, grpcServer *grpc.Server) {
+	// Wait for interrupt signal
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	// Initiate shutdown
+	log.Println("Shutting down gracefully...")
+	cancel() // Cancel context to stop background goroutines
+
+	// Create shutdown context with 10 second timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	// Shutdown HTTP server
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	} else {
+		log.Println("HTTP server gracefully stopped")
+	}
+
+	// Gracefully stop gRPC server
+	grpcServer.GracefulStop()
+	log.Println("gRPC server gracefully stopped")
+
+	log.Println("Server gracefully stopped")
+}
+
+// Helper to get environment variable with fallback
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
+// Helper to get duration from environment variable with fallback
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	if value, exists := os.LookupEnv(key); exists {
+		if duration, err := time.ParseDuration(value); err == nil {
+			return duration
+		}
+		log.Printf("Invalid duration for %s, using default", key)
+	}
+	return fallback
+}

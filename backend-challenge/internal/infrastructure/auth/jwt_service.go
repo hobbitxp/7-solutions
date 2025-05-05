@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/model"
 	"github.com/golang-jwt/jwt/v5"
 )
 

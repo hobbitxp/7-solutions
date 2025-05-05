@@ -3,10 +3,14 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"sort"
+	"sync"
 	"time"
 
-	"github.com/7-solutions/backend-challenge/internal/domain/model"
-	"github.com/7-solutions/backend-challenge/internal/domain/repository"
+	"backend-challenge/internal/domain/model"
+	"backend-challenge/internal/domain/repository"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -21,39 +25,59 @@ var (
 	ErrDatabase       = errors.New("database error")
 )
 
-// mongoRepository implements the UserRepository interface
-type mongoRepository struct {
-	client     *mongo.Client
+// MongoRepository implements the UserRepository interface
+type MongoRepository struct {
+	Client     *mongo.Client
 	database   string
 	collection string
 }
 
 // NewMongoRepository creates a new MongoDB repository
 func NewMongoRepository(ctx context.Context, uri, dbName string) (repository.UserRepository, error) {
-	// Set up connection options
-	clientOptions := options.Client().ApplyURI(uri)
-	clientOptions.SetConnectTimeout(10 * time.Second)
+	// Use MongoDB in production, fall back to mock for development or testing
+	if uri == "" {
+		return nil, errors.New("MongoDB URI is not provided")
+	}
+	
+	if uri == "mock" {
+		log.Println("WARNING: Using in-memory mock repository as explicitly requested")
+		return NewMockRepository(), nil
+	}
+
+	// Set client options with reasonable timeouts
+	clientOptions := options.Client().
+		ApplyURI(uri).
+		SetConnectTimeout(5 * time.Second).
+		SetServerSelectionTimeout(5 * time.Second)
 
 	// Connect to MongoDB
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create MongoDB client: %w", err)
 	}
 
+	// Set up a timeout context for the connection test
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	
 	// Check the connection
-	err = client.Ping(ctx, readpref.Primary())
+	err = client.Ping(pingCtx, readpref.Primary())
 	if err != nil {
-		return nil, err
+		// Disconnect the client on failure
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
+
+	log.Println("Connected to MongoDB successfully")
 
 	// Create repository
-	repo := &mongoRepository{
-		client:     client,
+	repo := &MongoRepository{
+		Client:     client,
 		database:   dbName,
 		collection: "users",
 	}
 
-	// Create indexes for email uniqueness
+	// Create indexes
 	err = repo.createIndexes(ctx)
 	if err != nil {
 		return nil, err
@@ -62,9 +86,151 @@ func NewMongoRepository(ctx context.Context, uri, dbName string) (repository.Use
 	return repo, nil
 }
 
+// mockRepository implements the UserRepository interface with in-memory storage
+type mockRepository struct {
+	users map[string]*model.User
+	mu    sync.RWMutex
+}
+
+// NewMockRepository creates a new mock repository
+func NewMockRepository() repository.UserRepository {
+	return &mockRepository{
+		users: make(map[string]*model.User),
+	}
+}
+
+// Create adds a new user
+func (r *mockRepository) Create(ctx context.Context, user *model.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Check for duplicate email
+	for _, existingUser := range r.users {
+		if existingUser.Email == user.Email {
+			return ErrDuplicateEmail
+		}
+	}
+
+	// Generate ID if not set
+	if user.ID == "" {
+		user.ID = primitive.NewObjectID().Hex()
+	}
+
+	// Set creation time if not set
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = time.Now()
+	}
+
+	// Store user
+	r.users[user.ID] = user
+	return nil
+}
+
+// GetByID fetches a user by ID
+func (r *mockRepository) GetByID(ctx context.Context, id string) (*model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	user, ok := r.users[id]
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+	return user, nil
+}
+
+// GetByEmail fetches a user by email
+func (r *mockRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, user := range r.users {
+		if user.Email == email {
+			return user, nil
+		}
+	}
+	return nil, ErrUserNotFound
+}
+
+// Update updates a user
+func (r *mockRepository) Update(ctx context.Context, user *model.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Check if user exists
+	if _, ok := r.users[user.ID]; !ok {
+		return ErrUserNotFound
+	}
+
+	// Check for duplicate email
+	for id, existingUser := range r.users {
+		if id != user.ID && existingUser.Email == user.Email {
+			return ErrDuplicateEmail
+		}
+	}
+
+	// Update user
+	r.users[user.ID] = user
+	return nil
+}
+
+// Delete removes a user
+func (r *mockRepository) Delete(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.users[id]; !ok {
+		return ErrUserNotFound
+	}
+
+	delete(r.users, id)
+	return nil
+}
+
+// List returns all users with pagination
+func (r *mockRepository) List(ctx context.Context, page, pageSize int) ([]*model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var users []*model.User
+	for _, user := range r.users {
+		users = append(users, user)
+	}
+
+	// Sort by created_at
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].CreatedAt.After(users[j].CreatedAt)
+	})
+
+	// Paginate
+	start := (page - 1) * pageSize
+	if start >= len(users) {
+		return []*model.User{}, nil
+	}
+
+	end := start + pageSize
+	if end > len(users) {
+		end = len(users)
+	}
+
+	return users[start:end], nil
+}
+
+// CountUsers returns the total number of users
+func (r *mockRepository) CountUsers(ctx context.Context) (int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return int64(len(r.users)), nil
+}
+
+// Disconnect closes the connection
+func (r *mockRepository) Disconnect(ctx context.Context) error {
+	return nil
+}
+
 // Create unique index for email
-func (r *mongoRepository) createIndexes(ctx context.Context) error {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) createIndexes(ctx context.Context) error {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	// Create unique index for email
 	_, err := collection.Indexes().CreateOne(
@@ -79,8 +245,8 @@ func (r *mongoRepository) createIndexes(ctx context.Context) error {
 }
 
 // Create adds a new user to the database
-func (r *mongoRepository) Create(ctx context.Context, user *model.User) error {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) Create(ctx context.Context, user *model.User) error {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 
 	// Generate new ID if not set
 	if user.ID == "" {
@@ -102,8 +268,8 @@ func (r *mongoRepository) Create(ctx context.Context, user *model.User) error {
 }
 
 // GetByID fetches a user by ID
-func (r *mongoRepository) GetByID(ctx context.Context, id string) (*model.User, error) {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) GetByID(ctx context.Context, id string) (*model.User, error) {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	// Check if ID is a valid ObjectID
 	var filter bson.M
@@ -133,8 +299,8 @@ func (r *mongoRepository) GetByID(ctx context.Context, id string) (*model.User, 
 }
 
 // GetByEmail fetches a user by email
-func (r *mongoRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	var user model.User
 	err := collection.FindOne(ctx, bson.M{"email": email}).Decode(&user)
@@ -149,8 +315,8 @@ func (r *mongoRepository) GetByEmail(ctx context.Context, email string) (*model.
 }
 
 // Update updates a user in the database
-func (r *mongoRepository) Update(ctx context.Context, user *model.User) error {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) Update(ctx context.Context, user *model.User) error {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	// Check if ID is a valid ObjectID
 	var filter bson.M
@@ -190,8 +356,8 @@ func (r *mongoRepository) Update(ctx context.Context, user *model.User) error {
 }
 
 // Delete removes a user from the database
-func (r *mongoRepository) Delete(ctx context.Context, id string) error {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) Delete(ctx context.Context, id string) error {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	// Check if ID is a valid ObjectID
 	var filter bson.M
@@ -221,8 +387,8 @@ func (r *mongoRepository) Delete(ctx context.Context, id string) error {
 }
 
 // List returns all users with pagination
-func (r *mongoRepository) List(ctx context.Context, page, pageSize int) ([]*model.User, error) {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) List(ctx context.Context, page, pageSize int) ([]*model.User, error) {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	// Calculate skip for pagination
 	skip := (page - 1) * pageSize
@@ -250,8 +416,8 @@ func (r *mongoRepository) List(ctx context.Context, page, pageSize int) ([]*mode
 }
 
 // CountUsers returns the total number of users in the database
-func (r *mongoRepository) CountUsers(ctx context.Context) (int64, error) {
-	collection := r.client.Database(r.database).Collection(r.collection)
+func (r *MongoRepository) CountUsers(ctx context.Context) (int64, error) {
+	collection := r.Client.Database(r.database).Collection(r.collection)
 	
 	count, err := collection.CountDocuments(ctx, bson.M{})
 	if err != nil {
@@ -262,6 +428,6 @@ func (r *mongoRepository) CountUsers(ctx context.Context) (int64, error) {
 }
 
 // Disconnect closes the MongoDB connection
-func (r *mongoRepository) Disconnect(ctx context.Context) error {
-	return r.client.Disconnect(ctx)
+func (r *MongoRepository) Disconnect(ctx context.Context) error {
+	return r.Client.Disconnect(ctx)
 }

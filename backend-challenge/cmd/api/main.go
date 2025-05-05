@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -11,15 +10,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/7-solutions/backend-challenge/internal/application/handler"
-	"github.com/7-solutions/backend-challenge/internal/domain/service"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/auth"
-	grpcserver "github.com/7-solutions/backend-challenge/internal/infrastructure/grpc"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/middleware"
-	"github.com/7-solutions/backend-challenge/internal/infrastructure/repository"
+	"backend-challenge/internal/application/handler"
+	"backend-challenge/internal/domain/repository"
+	"backend-challenge/internal/domain/service"
+	"backend-challenge/internal/infrastructure/auth"
+	grpcserver "backend-challenge/internal/infrastructure/grpc"
+	"backend-challenge/internal/infrastructure/middleware"
+	repo "backend-challenge/internal/infrastructure/repository"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
@@ -33,13 +35,23 @@ func main() {
 	defer cancel()
 
 	// Setup MongoDB connection
-	mongoURI := getEnv("MONGO_URI", "mongodb://localhost:27017")
-	dbName := getEnv("DB_NAME", "user_service")
-	mongoRepo, err := repository.NewMongoRepository(ctx, mongoURI, dbName)
-	if err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	mongoURI := getEnv("MONGODB_URI", "")
+	if mongoURI == "" {
+		log.Println("MONGODB_URI not set, checking legacy MONGO_URI")
+		mongoURI = getEnv("MONGO_URI", "") // Check legacy variable for backward compatibility
 	}
-	defer mongoRepo.Disconnect(ctx)
+	
+	dbName := getEnv("DB_NAME", "user_service")
+	log.Printf("Connecting to MongoDB: URI=%s, DB=%s", mongoURI, dbName)
+	
+	mongoRepo, err := repo.NewMongoRepository(ctx, mongoURI, dbName)
+	if err != nil {
+		log.Printf("WARNING: Failed to connect to MongoDB: %v. Using in-memory repository instead", err)
+		mongoRepo = repo.NewMockRepository() // Fallback to mock repository
+	} else {
+		log.Println("Connected to MongoDB successfully")
+		defer mongoRepo.Disconnect(ctx)
+	}
 
 	// Setup Auth Service
 	jwtSecret := getEnv("JWT_SECRET", "your-secret-key")
@@ -48,34 +60,57 @@ func main() {
 
 	// Setup User Service
 	userService := service.NewUserService(mongoRepo)
+	
+	// Setup Todo Repository
+	var mongoClient *mongo.Client
+	if mr, ok := mongoRepo.(*repo.MongoRepository); ok {
+		mongoClient = mr.Client
+	}
+	todoRepo := repo.NewMongoTodoRepository(mongoClient, dbName)
+	
+	// Setup Todo Service
+	todoService := service.NewTodoService(todoRepo)
+	
+	// Temporarily comment out external repository
+	// Setup External User Repository
+	// externalRepo := repo.NewMongoExternalRepository(ctx, mongoRepo.(*repo.mongoRepository).client, dbName)
+	
+	// Setup Transform Service with nil repository (temporary)
+	transformService := service.NewTransformService(nil)
 
 	// Setup REST API server
-	restServer := setupRESTServer(userService, authService)
-
+	restServer := setupRESTServer(userService, authService, transformService, todoService)
+	
 	// Setup gRPC server
-	grpcServer := setupGRPCServer(userService, authService)
-
+	grpcServer := setupGRPCServer(userService, authService, transformService)
+	
 	// Start background user count logging
 	go startBackgroundUserCount(ctx, mongoRepo)
+	
+	// Start background todo item return checker
+	go startBackgroundTodoReturn(ctx, todoService)
 
-	// Start servers
+	// Start both REST and gRPC servers
 	go startRESTServer(restServer)
 	go startGRPCServer(grpcServer)
 
-	// Setup graceful shutdown
+	// Setup graceful shutdown for both servers
 	gracefulShutdown(ctx, cancel, restServer, grpcServer)
 }
 
 // Setup REST API server
-func setupRESTServer(userService service.UserService, authService auth.AuthService) *http.Server {
+func setupRESTServer(userService service.UserService, authService auth.AuthService, transformService service.TransformService, todoService service.TodoService) *http.Server {
 	// Setup Router
 	r := mux.NewRouter()
 	r.Use(middleware.LoggingMiddleware)
 	r.Use(middleware.PanicRecoveryMiddleware)
 
 	// Register handlers
+	handler.RegisterHealthHandler(r) // Add health check handler
 	handler.RegisterAuthHandler(r, authService, userService)
 	handler.RegisterUserHandler(r, userService, authService)
+	handler.RegisterTransformHandler(r, transformService)
+	handler.RegisterTodoHandler(r, todoService, authService)
 
 	// Setup API server
 	port := getEnv("PORT", "8080")
@@ -96,12 +131,17 @@ func startRESTServer(srv *http.Server) {
 }
 
 // Setup gRPC server
-func setupGRPCServer(userService service.UserService, authService auth.AuthService) *grpc.Server {
+func setupGRPCServer(userService service.UserService, authService auth.AuthService, transformService service.TransformService) *grpc.Server {
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
 
 	// Register services
 	grpcserver.Register(grpcServer, userService, authService)
+	// Temporarily comment out until proto files are generated
+	// grpcserver.RegisterTransform(grpcServer, transformService)
+	
+	// Register reflection service for grpcurl
+	reflection.Register(grpcServer)
 
 	return grpcServer
 }
@@ -121,14 +161,14 @@ func startGRPCServer(grpcServer *grpc.Server) {
 }
 
 // Background goroutine that logs the number of users every 10 seconds
-func startBackgroundUserCount(ctx context.Context, repo repository.UserRepository) {
+func startBackgroundUserCount(ctx context.Context, userRepo repository.UserRepository) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			count, err := repo.CountUsers(ctx)
+			count, err := userRepo.CountUsers(ctx)
 			if err != nil {
 				log.Printf("Error counting users: %v", err)
 			} else {
@@ -136,6 +176,28 @@ func startBackgroundUserCount(ctx context.Context, repo repository.UserRepositor
 			}
 		case <-ctx.Done():
 			log.Println("Stopping background user count")
+			return
+		}
+	}
+}
+
+// Background goroutine that checks and returns todo items that have reached their return time
+func startBackgroundTodoReturn(ctx context.Context, todoService service.TodoService) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now().Format(time.RFC3339)
+			count, err := todoService.ReturnTimedOutItems(ctx, now)
+			if err != nil {
+				log.Printf("Error returning timed out todo items: %v", err)
+			} else if count > 0 {
+				log.Printf("Returned %d timed out todo items", count)
+			}
+		case <-ctx.Done():
+			log.Println("Stopping background todo return checker")
 			return
 		}
 	}
@@ -163,11 +225,11 @@ func gracefulShutdown(ctx context.Context, cancel context.CancelFunc, httpServer
 		log.Println("HTTP server gracefully stopped")
 	}
 
-	// Shutdown gRPC server
+	// Gracefully stop gRPC server
 	grpcServer.GracefulStop()
 	log.Println("gRPC server gracefully stopped")
 
-	log.Println("All servers gracefully stopped")
+	log.Println("Server gracefully stopped")
 }
 
 // Helper to get environment variable with fallback
